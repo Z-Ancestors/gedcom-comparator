@@ -1,2 +1,2 @@
-# gedcom-comparator
-compare two GEDCOM files local browser privacy first edition
+# GEDCOM Comparator
+## Compare two GEDCOM files in your local browser with this privacy first edition.
