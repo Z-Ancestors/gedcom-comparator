@@ -1,0 +1,437 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>GEDCOM Comparator: Side-by-Side Compare (Enhanced)</title>
+<style>
+  :root{font-family:system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial;}
+  body{margin:18px;background:#f6f7f9;color:#222}
+  h1{margin:0 0 10px;font-size:20px}
+  p.small{margin:6px 0 18px;color:#444}
+  .controls{display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-bottom:14px}
+  input[type=file]{padding:6px 8px}
+  button{padding:8px 12px;border-radius:8px;border:1px solid #cbd5e1;background:#fff;cursor:pointer}
+  button:hover{background:#f8fafc}
+  button.export{background:#10b981;color:#fff;border-color:#059669}
+  button.export:hover{background:#059669}
+  .wrap{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .col{background:#fff;border-radius:8px;padding:12px;box-shadow:0 6px 18px rgba(12,20,30,.06)}
+  .col h2{margin:0 0 8px;font-size:15px}
+  table{width:100%;border-collapse:collapse}
+  td,th{padding:6px 8px;vertical-align:top;border-bottom:1px solid #f0f2f5;font-size:14px}
+  tr:nth-child(odd) td{background:#fbfcfe}
+  .exact-match{background:linear-gradient(90deg,#fff7e6,#fff);border-left:3px solid #f0b429}
+  .fuzzy-match{background:linear-gradient(90deg,#e6f7ff,#fff);border-left:3px solid #3b82f6}
+  .meta{font-size:12px;color:#666;margin-top:10px}
+  .notice{margin-top:12px;padding:10px;border-radius:6px;background:#fff3f3;color:#7d1010;border:1px solid #ffd6d6}
+  .match-info{margin-top:14px;padding:12px;border-radius:6px;background:#f0f9ff;border:1px solid #bae6fd}
+  .match-list{margin-top:8px;font-size:13px;line-height:1.6}
+  .match-item{margin:4px 0;padding:4px 0;border-bottom:1px solid #e0f2fe}
+  .match-item:last-child{border-bottom:none}
+  .legend{display:flex;gap:16px;margin-top:12px;font-size:12px}
+  .legend-item{display:flex;align-items:center;gap:6px}
+  .legend-box{width:20px;height:14px;border-radius:3px}
+  .settings{margin-bottom:14px;padding:10px;background:#fff;border-radius:6px;border:1px solid #e5e7eb}
+  .settings label{margin-right:16px;font-size:13px}
+  .dates{color:#666;font-size:12px}
+  tr.highlighted{animation:pulse 1s ease-in-out;scroll-margin-top:20px}
+  @keyframes pulse{0%,100%{background:transparent}50%{background:#fef3c7}}
+  @media (max-width:840px){ .wrap{grid-template-columns:1fr} }
+</style>
+</head>
+<body>
+  <h1>GEDCOM Comparator — Side-by-side Individuals (Enhanced)</h1>
+  <p class="small">Compare two GEDCOM files with fuzzy matching, birth/death dates, export options, and visual connections.</p>
+
+  <div class="controls">
+    <label>File A: <input id="fileA" type="file" accept=".ged,text/plain"></label>
+    <label>File B: <input id="fileB" type="file" accept=".ged,text/plain"></label>
+    <button id="parseBtn">Parse & Compare</button>
+    <button id="clearBtn">Clear</button>
+    <button id="exportBtn" class="export" style="display:none">Export Results</button>
+  </div>
+
+  <div class="settings" style="display:none" id="settingsPanel">
+    <label><input type="checkbox" id="fuzzyMatch" checked> Enable fuzzy matching (catches variations like "John Smith" vs "John W. Smith")</label>
+    <label><input type="checkbox" id="showDates" checked> Show birth/death dates</label>
+  </div>
+
+  <div id="outputArea">
+    <div class="wrap">
+      <div class="col">
+        <h2 id="titleA">File A</h2>
+        <div id="countA" class="meta"></div>
+      </div>
+      <div class="col">
+        <h2 id="titleB">File B</h2>
+        <div id="countB" class="meta"></div>
+      </div>
+    </div>
+
+    <div class="legend" id="legendBox" style="display:none">
+      <div class="legend-item">
+        <div class="legend-box" style="background:linear-gradient(90deg,#fff7e6,#fff);border-left:3px solid #f0b429"></div>
+        <span>Exact match</span>
+      </div>
+      <div class="legend-item">
+        <div class="legend-box" style="background:linear-gradient(90deg,#e6f7ff,#fff);border-left:3px solid #3b82f6"></div>
+        <span>Fuzzy match</span>
+      </div>
+    </div>
+
+    <div style="margin-top:12px" class="wrap">
+      <div class="col" style="overflow:auto">
+        <table id="tableA"></table>
+      </div>
+      <div class="col" style="overflow:auto">
+        <table id="tableB"></table>
+      </div>
+    </div>
+
+    <div id="matchBox" class="match-info" style="display:none"></div>
+  </div>
+
+<script>
+/* Enhanced GEDCOM parsing with fuzzy matching and export */
+
+let currentMatches = null;
+
+function parseGedcomText(text) {
+  const lines = text.split(/\r?\n/);
+  const individuals = {};
+  let currentId = null;
+  let inInd = false;
+  let currentEvent = null;
+
+  for (let raw of lines) {
+    const line = raw.trim();
+    if (!line) continue;
+
+    const parts = line.split(/\s+/, 3);
+    const level = parts[0];
+    const tag = parts[1] || "";
+    const rest = (parts.length >= 3) ? parts[2] : "";
+
+    if (level === "0" && /@I[^@]+@/.test(line) && /\bINDI\b/.test(line)) {
+      const m = line.match(/@I[^@]+@/);
+      currentId = m ? m[0].replace(/@/g,"") : ("I?" + Math.random().toString(36).slice(2,7));
+      individuals[currentId] = { id: currentId, name: null, events: {} };
+      inInd = true;
+      currentEvent = null;
+      continue;
+    }
+
+    if (level === "0" && /\bFAM\b/.test(line)) {
+      currentId = null; inInd = false; currentEvent = null; continue;
+    }
+
+    if (!inInd || !currentId) continue;
+
+    if (tag === "NAME") {
+      let n = rest.replace(/\//g, "").trim();
+      individuals[currentId].name = n || individuals[currentId].name;
+    } else if (["BIRT","DEAT","CHR","BAPM","BAPL","BAPO","BURI"].includes(tag)) {
+      currentEvent = tag;
+      individuals[currentId].events[currentEvent] = individuals[currentId].events[currentEvent] || {};
+    } else if (tag === "DATE" && currentEvent) {
+      individuals[currentId].events[currentEvent].date = rest.trim();
+    } else if (tag === "PLAC" && currentEvent) {
+      individuals[currentId].events[currentEvent].place = rest.trim();
+    }
+  }
+  return Object.values(individuals);
+}
+
+function extractLabel(person, showDatesOverride) {
+  const birthCandidates = ["BIRT","CHR","BAPM","BAPL","BAPO"];
+  const deathCandidates = ["DEAT","BURI"];
+  
+  let birthDate = null, deathDate = null;
+  for (let ev of birthCandidates) {
+    if (person.events[ev] && person.events[ev].date) { birthDate = person.events[ev].date; break; }
+  }
+  for (let ev of deathCandidates) {
+    if (person.events[ev] && person.events[ev].date) { deathDate = person.events[ev].date; break; }
+  }
+  
+  let birthYear = null, deathYear = null;
+  if (birthDate) {
+    const m = birthDate.match(/(\d{4})/);
+    if (m) birthYear = parseInt(m[1], 10);
+  }
+  if (deathDate) {
+    const m = deathDate.match(/(\d{4})/);
+    if (m) deathYear = parseInt(m[1], 10);
+  }
+  
+  const name = person.name || person.id;
+  let display = name;
+  
+  const showDates = showDatesOverride !== undefined ? showDatesOverride : 
+                    (document.getElementById('showDates') ? document.getElementById('showDates').checked : true);
+  
+  if (showDates) {
+    if (birthYear && deathYear) {
+      display = `${name} (${birthYear}–${deathYear})`;
+    } else if (birthYear) {
+      display = `${name} (b. ${birthYear})`;
+    } else if (deathYear) {
+      display = `${name} (d. ${deathYear})`;
+    }
+  }
+  
+  return { display, year: birthYear, deathYear, nameRaw: name, id: person.id };
+}
+
+function normalizeNameForCompare(s) {
+  return s.replace(/\s*\([bd]\.\s*\d{3,4}(–\d{3,4})?\)\s*/gi, "")
+    .replace(/\s*\(\d{3,4}–\d{3,4}\)\s*/g, "")
+    .replace(/[^\w\s\-']/g,"")
+    .replace(/\s+/g," ")
+    .trim()
+    .toLowerCase();
+}
+
+function levenshteinDistance(a, b) {
+  const matrix = [];
+  for (let i = 0; i <= b.length; i++) matrix[i] = [i];
+  for (let j = 0; j <= a.length; j++) matrix[0][j] = j;
+  
+  for (let i = 1; i <= b.length; i++) {
+    for (let j = 1; j <= a.length; j++) {
+      if (b.charAt(i-1) === a.charAt(j-1)) {
+        matrix[i][j] = matrix[i-1][j-1];
+      } else {
+        matrix[i][j] = Math.min(
+          matrix[i-1][j-1] + 1,
+          matrix[i][j-1] + 1,
+          matrix[i-1][j] + 1
+        );
+      }
+    }
+  }
+  return matrix[b.length][a.length];
+}
+
+function findMatches(listA, listB, useFuzzy) {
+  const exact = [];
+  const fuzzy = [];
+  const normA = listA.map(p => ({ person: p, norm: normalizeNameForCompare(p.display) }));
+  const normB = listB.map(p => ({ person: p, norm: normalizeNameForCompare(p.display) }));
+  
+  for (let a of normA) {
+    for (let b of normB) {
+      if (a.norm === b.norm) {
+        exact.push({ a: a.person, b: b.person, type: 'exact' });
+      } else if (useFuzzy) {
+        const dist = levenshteinDistance(a.norm, b.norm);
+        const maxLen = Math.max(a.norm.length, b.norm.length);
+        const similarity = 1 - (dist / maxLen);
+        
+        if (similarity >= 0.8 && similarity < 1.0) {
+          fuzzy.push({ a: a.person, b: b.person, type: 'fuzzy', similarity });
+        }
+      }
+    }
+  }
+  
+  return { exact, fuzzy };
+}
+
+function showSideBySide(listA, listB, titleA, titleB) {
+  const tableA = document.getElementById('tableA');
+  const tableB = document.getElementById('tableB');
+  tableA.innerHTML = "";
+  tableB.innerHTML = "";
+
+  const useFuzzy = document.getElementById('fuzzyMatch').checked;
+  const matches = findMatches(listA, listB, useFuzzy);
+  currentMatches = { listA, listB, matches, titleA, titleB };
+  
+  const exactSet = new Set();
+  const fuzzySet = new Set();
+  
+  matches.exact.forEach(m => {
+    exactSet.add(m.a.id);
+    exactSet.add(m.b.id);
+  });
+  
+  matches.fuzzy.forEach(m => {
+    fuzzySet.add(m.a.id);
+    fuzzySet.add(m.b.id);
+  });
+
+  const maxlen = Math.max(listA.length, listB.length);
+
+  for (let i=0;i<maxlen;i++){
+    const trA = document.createElement('tr');
+    const tdA = document.createElement('td');
+    if (i < listA.length) {
+      tdA.innerText = listA[i].display;
+      trA.dataset.id = listA[i].id;
+      if (exactSet.has(listA[i].id)) tdA.classList.add('exact-match');
+      else if (fuzzySet.has(listA[i].id)) tdA.classList.add('fuzzy-match');
+    }
+    trA.appendChild(tdA);
+    tableA.appendChild(trA);
+
+    const trB = document.createElement('tr');
+    const tdB = document.createElement('td');
+    if (i < listB.length) {
+      tdB.innerText = listB[i].display;
+      trB.dataset.id = listB[i].id;
+      if (exactSet.has(listB[i].id)) tdB.classList.add('exact-match');
+      else if (fuzzySet.has(listB[i].id)) tdB.classList.add('fuzzy-match');
+    }
+    trB.appendChild(tdB);
+    tableB.appendChild(trB);
+  }
+
+  document.getElementById('titleA').innerText = titleA;
+  document.getElementById('titleB').innerText = titleB;
+  document.getElementById('countA').innerText = `${listA.length} individuals`;
+  document.getElementById('countB').innerText = `${listB.length} individuals`;
+
+  const matchBox = document.getElementById('matchBox');
+  matchBox.style.display = 'block';
+  
+  let html = `<strong>Match Summary:</strong><br>`;
+  html += `Exact matches: ${matches.exact.length}<br>`;
+  if (useFuzzy) html += `Fuzzy matches: ${matches.fuzzy.length}<br>`;
+  
+  if (matches.exact.length > 0 || matches.fuzzy.length > 0) {
+    html += `<div class="match-list">`;
+    
+    if (matches.exact.length > 0) {
+      html += `<div style="margin-top:8px"><strong>Exact matches:</strong></div>`;
+      matches.exact.forEach(m => {
+        html += `<div class="match-item">${m.a.nameRaw}</div>`;
+      });
+    }
+    
+    if (matches.fuzzy.length > 0) {
+      html += `<div style="margin-top:8px"><strong>Fuzzy matches (similar names):</strong></div>`;
+      matches.fuzzy.forEach(m => {
+        const pct = Math.round(m.similarity * 100);
+        html += `<div class="match-item">${m.a.nameRaw} ↔ ${m.b.nameRaw} (${pct}% similar)</div>`;
+      });
+    }
+    
+    html += `</div>`;
+  } else {
+    html += `<br>No matches detected.`;
+  }
+  
+  matchBox.innerHTML = html;
+  
+  document.getElementById('legendBox').style.display = 'flex';
+  document.getElementById('exportBtn').style.display = 'inline-block';
+  document.getElementById('settingsPanel').style.display = 'block';
+}
+
+function exportResults() {
+  if (!currentMatches) return;
+  
+  const { listA, listB, matches, titleA, titleB } = currentMatches;
+  
+  let csv = `"Type","File A Name","File A Dates","File B Name","File B Dates","Similarity"\n`;
+  
+  matches.exact.forEach(m => {
+    const datesA = m.a.year && m.a.deathYear ? `${m.a.year}-${m.a.deathYear}` : 
+                   m.a.year ? `b. ${m.a.year}` : 
+                   m.a.deathYear ? `d. ${m.a.deathYear}` : '';
+    const datesB = m.b.year && m.b.deathYear ? `${m.b.year}-${m.b.deathYear}` : 
+                   m.b.year ? `b. ${m.b.year}` : 
+                   m.b.deathYear ? `d. ${m.b.deathYear}` : '';
+    csv += `"Exact","${m.a.nameRaw}","${datesA}","${m.b.nameRaw}","${datesB}","100%"\n`;
+  });
+  
+  matches.fuzzy.forEach(m => {
+    const datesA = m.a.year && m.a.deathYear ? `${m.a.year}-${m.a.deathYear}` : 
+                   m.a.year ? `b. ${m.a.year}` : 
+                   m.a.deathYear ? `d. ${m.a.deathYear}` : '';
+    const datesB = m.b.year && m.b.deathYear ? `${m.b.year}-${m.b.deathYear}` : 
+                   m.b.year ? `b. ${m.b.year}` : 
+                   m.b.deathYear ? `d. ${m.b.deathYear}` : '';
+    const pct = Math.round(m.similarity * 100);
+    csv += `"Fuzzy","${m.a.nameRaw}","${datesA}","${m.b.nameRaw}","${datesB}","${pct}%"\n`;
+  });
+  
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `gedcom-comparison-${Date.now()}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+document.getElementById('parseBtn').addEventListener('click', async () => {
+  const fA = document.getElementById('fileA').files[0];
+  const fB = document.getElementById('fileB').files[0];
+  if (!fA || !fB) { alert('Please choose both GEDCOM files.'); return; }
+
+  try {
+    const textA = await fA.text();
+    const textB = await fB.text();
+    const peopleA = parseGedcomText(textA);
+    const peopleB = parseGedcomText(textB);
+    const mappedA = peopleA.map(extractLabel);
+    const mappedB = peopleB.map(extractLabel);
+    
+    mappedA.sort((p,q) => {
+      if (p.year == null && q.year == null) return 0;
+      if (p.year == null) return 1;
+      if (q.year == null) return -1;
+      return q.year - p.year;
+    });
+    mappedB.sort((p,q) => {
+      if (p.year == null && q.year == null) return 0;
+      if (p.year == null) return 1;
+      if (q.year == null) return -1;
+      return q.year - p.year;
+    });
+    
+    showSideBySide(mappedA, mappedB, fA.name, fB.name);
+  } catch (err) {
+    alert("Error parsing files: " + err.message);
+    console.error(err);
+  }
+});
+
+document.getElementById('clearBtn').addEventListener('click', () => {
+  document.getElementById('fileA').value = "";
+  document.getElementById('fileB').value = "";
+  document.getElementById('tableA').innerHTML = "";
+  document.getElementById('tableB').innerHTML = "";
+  document.getElementById('titleA').innerText = "File A";
+  document.getElementById('titleB').innerText = "File B";
+  document.getElementById('countA').innerText = "";
+  document.getElementById('countB').innerText = "";
+  document.getElementById('matchBox').style.display = 'none';
+  document.getElementById('legendBox').style.display = 'none';
+  document.getElementById('exportBtn').style.display = 'none';
+  document.getElementById('settingsPanel').style.display = 'none';
+  currentMatches = null;
+});
+
+document.getElementById('exportBtn').addEventListener('click', exportResults);
+
+document.getElementById('fuzzyMatch').addEventListener('change', () => {
+  if (currentMatches) {
+    const { listA, listB, titleA, titleB } = currentMatches;
+    showSideBySide(listA, listB, titleA, titleB);
+  }
+});
+
+document.getElementById('showDates').addEventListener('change', () => {
+  const fA = document.getElementById('fileA').files[0];
+  const fB = document.getElementById('fileB').files[0];
+  if (fA && fB) {
+    document.getElementById('parseBtn').click();
+  }
+});
+</script>
+</body>
+</html>
